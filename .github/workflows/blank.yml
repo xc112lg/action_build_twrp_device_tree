@@ -15,35 +15,63 @@ jobs:
     - name: Check Out
       uses: actions/checkout@v4
 
-    - name: Prepare the environment
+    - name: Prepare environment
       run: |
         sudo apt update
-        sudo apt -y install python3 python3-pip cpio wget aria2 zip
+        sudo apt -y install python3 python3-pip cpio wget aria2 zip git
         python3 -m pip install --upgrade pip
-        python3 -m pip install twrpdtgen==2.0.0
-        
-        mkdir dt
+        python3 -m pip install twrpdtgen
 
-    - name: Download boot or recovery img
+    - name: Patch twrpdtgen (fix missing prop)
+      run: |
+        FILE=$(python3 -c "import twrpdtgen; print(twrpdtgen.__file__)")
+        sed -i 's/raise AssertionError.*/return "28"/g' $FILE
+
+    - name: Download image
       run: |
         aria2c "${{ github.event.inputs.IMG_URL }}"
         ls -lah
 
-    - name: Start build
+    - name: Generate device tree
       run: |
+        mkdir dt
         IMG=$(ls *.img | head -n 1)
         python3 -m twrpdtgen -o dt/ "$IMG"
 
-    - name: ZIP device tree
+    - name: Detect device info
+      id: device
       run: |
-        zip -r DeviceTree.zip ./dt
+        DEVICE=$(grep -r "TARGET_DEVICE" dt 2>/dev/null | head -n1 | cut -d '"' -f2)
+        BRAND=$(grep -r "TARGET_BRAND" dt 2>/dev/null | head -n1 | cut -d '"' -f2)
 
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./DeviceTree.zip
-        name: TWRP_Device_Tree-${{ github.run_id }}
-        tag_name: ${{ github.run_id }}
-        body: DeviceTree for twrp
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # fallback if not found
+        DEVICE=${DEVICE:-unknown}
+        BRAND=${BRAND:-generic}
+
+        echo "device=$DEVICE" >> $GITHUB_OUTPUT
+        echo "brand=$BRAND" >> $GITHUB_OUTPUT
+
+    - name: Create repository
+      run: |
+        REPO_NAME="android_device_${{ steps.device.outputs.brand }}_${{ steps.device.outputs.device }}"
+        
+        curl -X POST https://api.github.com/user/repos \
+          -H "Authorization: token ${{ secrets.GH_PAT }}" \
+          -d "{\"name\":\"$REPO_NAME\",\"private\":false}"
+
+        echo "repo=$REPO_NAME" >> $GITHUB_ENV
+
+    - name: Push device tree
+      run: |
+        cd dt
+        git init
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+
+        git add .
+        git commit -m "Initial TWRP device tree"
+
+        git branch -M main
+
+        git remote add origin https://${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/${{ env.repo }}.git
+        git push origin main
