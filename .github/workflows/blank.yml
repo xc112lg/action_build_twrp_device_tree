@@ -22,11 +22,6 @@ jobs:
         python3 -m pip install --upgrade pip
         python3 -m pip install twrpdtgen==2.0.0
 
-    - name: Patch twrpdtgen (fix missing prop)
-      run: |
-        FILE=$(python3 -c "import twrpdtgen; print(twrpdtgen.__file__)")
-        sed -i 's/raise AssertionError.*/return "28"/g' $FILE
-
     - name: Download image
       run: |
         aria2c "${{ github.event.inputs.IMG_URL }}"
