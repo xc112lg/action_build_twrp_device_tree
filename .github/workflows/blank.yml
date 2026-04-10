@@ -20,7 +20,7 @@ jobs:
         sudo apt update
         sudo apt -y install python3 python3-pip cpio wget aria2 zip git
         python3 -m pip install --upgrade pip
-        python3 -m pip install twrpdtgen==2.0.0
+        python3 -m pip install twrpdtgen
 
     - name: Patch twrpdtgen (fix missing prop)
       run: |
@@ -37,24 +37,35 @@ jobs:
         mkdir dt
         IMG=$(ls *.img | head -n 1)
         python3 -m twrpdtgen -o dt/ "$IMG"
+        ls -R dt
 
+    # 🔥 RELIABLE DETECTION (NO BROKEN GREP)
     - name: Detect device info
       id: device
       run: |
-        DEVICE=$(grep -r "TARGET_DEVICE" dt 2>/dev/null | head -n1 | cut -d '"' -f2)
-        BRAND=$(grep -r "TARGET_BRAND" dt 2>/dev/null | head -n1 | cut -d '"' -f2)
+        # Get path like dt/samsung/a5ltechn
+        DEVICE_PATH=$(find dt -mindepth 2 -maxdepth 2 -type d | head -n 1)
 
-        # fallback if not found
-        DEVICE=${DEVICE:-unknown}
+        BRAND=$(basename $(dirname "$DEVICE_PATH"))
+        DEVICE=$(basename "$DEVICE_PATH")
+
+        # fallback safety
         BRAND=${BRAND:-generic}
+        DEVICE=${DEVICE:-unknown}
 
-        echo "device=$DEVICE" >> $GITHUB_OUTPUT
+        echo "Detected BRAND=$BRAND"
+        echo "Detected DEVICE=$DEVICE"
+
         echo "brand=$BRAND" >> $GITHUB_OUTPUT
+        echo "device=$DEVICE" >> $GITHUB_OUTPUT
 
     - name: Create repository
       run: |
         REPO_NAME="android_device_${{ steps.device.outputs.brand }}_${{ steps.device.outputs.device }}"
-        
+        REPO_NAME=$(echo "$REPO_NAME" | tr -cd '[:alnum:]_')
+
+        echo "Creating repo: $REPO_NAME"
+
         curl -X POST https://api.github.com/user/repos \
           -H "Authorization: token ${{ secrets.GH_PAT }}" \
           -d "{\"name\":\"$REPO_NAME\",\"private\":false}"
@@ -63,7 +74,8 @@ jobs:
 
     - name: Push device tree
       run: |
-        cd dt
+        cd dt/${{ steps.device.outputs.brand }}/${{ steps.device.outputs.device }}
+
         git init
         git config user.name "github-actions"
         git config user.email "actions@github.com"
