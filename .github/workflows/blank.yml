@@ -34,14 +34,17 @@ jobs:
         python3 -m twrpdtgen -o dt/ "$IMG"
         ls -R dt
 
+    # 🔥 RELIABLE DETECTION (NO BROKEN GREP)
     - name: Detect device info
       id: device
       run: |
+        # Get path like dt/samsung/a5ltechn
         DEVICE_PATH=$(find dt -mindepth 2 -maxdepth 2 -type d | head -n 1)
 
         BRAND=$(basename $(dirname "$DEVICE_PATH"))
         DEVICE=$(basename "$DEVICE_PATH")
 
+        # fallback safety
         BRAND=${BRAND:-generic}
         DEVICE=${DEVICE:-unknown}
 
@@ -51,51 +54,31 @@ jobs:
         echo "brand=$BRAND" >> $GITHUB_OUTPUT
         echo "device=$DEVICE" >> $GITHUB_OUTPUT
 
-    - name: Prepare repo name
+    - name: Create repository
       run: |
         REPO_NAME="android_device_${{ steps.device.outputs.brand }}_${{ steps.device.outputs.device }}"
         REPO_NAME=$(echo "$REPO_NAME" | tr -cd '[:alnum:]_')
-        echo "repo=$REPO_NAME" >> $GITHUB_ENV
-        echo "Using repo: $REPO_NAME"
 
-    - name: Create repository if not exists
-      run: |
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        echo "Creating repo: $REPO_NAME"
+
+        curl -X POST https://api.github.com/user/repos \
           -H "Authorization: token ${{ secrets.GH_PAT }}" \
-          https://api.github.com/repos/${{ github.repository_owner }}/${{ env.repo }})
+          -d "{\"name\":\"$REPO_NAME\",\"private\":false}"
 
-        if [ "$STATUS" = "200" ]; then
-          echo "Repo already exists"
-        else
-          echo "Creating repository..."
-          curl -X POST https://api.github.com/user/repos \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
-            -d "{\"name\":\"${{ env.repo }}\",\"private\":false}"
-        fi
+        echo "repo=$REPO_NAME" >> $GITHUB_ENV
 
-    - name: Push device tree (overwrite repo)
+    - name: Push device tree
       run: |
-        REPO_URL="https://${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/${{ env.repo }}.git"
+        cd dt/${{ steps.device.outputs.brand }}/${{ steps.device.outputs.device }}
 
-        git clone $REPO_URL repo || (
-          echo "Repo does not exist, initializing new one"
-          mkdir repo && cd repo && git init
-          git remote add origin $REPO_URL
-        )
-
-        cd repo
-
+        git init
         git config user.name "github-actions"
         git config user.email "actions@github.com"
 
-        # 🔥 Remove all existing files (including hidden ones)
-        rm -rf ./* ./.??* || true
-
-        # Copy new generated device tree
-        cp -r ../dt/${{ steps.device.outputs.brand }}/${{ steps.device.outputs.device }}/* .
-
         git add .
-        git commit -m "Overwrite with new TWRP device tree" || echo "Nothing to commit"
+        git commit -m "Initial TWRP device tree"
 
         git branch -M main
-        git push origin main --force
+
+        git remote add origin https://${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/${{ env.repo }}.git
+        git push origin main
