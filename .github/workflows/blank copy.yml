@@ -1,0 +1,140 @@
+name: Make OrangeFox Device
+
+on:
+  workflow_dispatch:
+    inputs:
+      IMG_URL:
+        description: 'IMG_URL'
+        required: true
+      MAINTAINER:
+        description: 'OF_MAINTAINER (your name/handle)'
+        required: false
+        default: 'xz'
+      FOX_AB_DEVICE:
+        description: 'Is this an A/B (seamless) device? (1 = yes, 0 = no)'
+        required: false
+        default: '0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check Out
+      uses: actions/checkout@v4
+
+    - name: Prepare environment
+      run: |
+        sudo apt update
+        sudo apt -y install python3 python3-pip cpio wget aria2 zip git
+        python3 -m pip install --upgrade pip
+        python3 -m pip install twrpdtgen==2.0.0
+
+    - name: Download image
+      run: |
+        aria2c "${{ github.event.inputs.IMG_URL }}"
+        ls -lah
+
+    - name: Generate device tree
+      run: |
+        mkdir dt
+        IMG=$(ls *.img | head -n 1)
+        python3 -m twrpdtgen -o dt/ "$IMG"
+        ls -R dt
+
+    # 🔥 RELIABLE DETECTION (NO BROKEN GREP)
+    - name: Detect device info
+      id: device
+      run: |
+        # Get path like dt/samsung/a5ltechn
+        DEVICE_PATH=$(find dt -mindepth 2 -maxdepth 2 -type d | head -n 1)
+
+        BRAND=$(basename $(dirname "$DEVICE_PATH"))
+        DEVICE=$(basename "$DEVICE_PATH")
+
+        # fallback safety
+        BRAND=${BRAND:-generic}
+        DEVICE=${DEVICE:-unknown}
+
+        echo "Detected BRAND=$BRAND"
+        echo "Detected DEVICE=$DEVICE"
+
+        echo "brand=$BRAND" >> $GITHUB_OUTPUT
+        echo "device=$DEVICE" >> $GITHUB_OUTPUT
+        echo "path=$DEVICE_PATH" >> $GITHUB_OUTPUT
+
+    - name: Add OrangeFox flags to BoardConfig.mk
+      run: |
+        BC="${{ steps.device.outputs.path }}/BoardConfig.mk"
+
+        if [ ! -f "$BC" ]; then
+          echo "ERROR: BoardConfig.mk not found at $BC"
+          exit 1
+        fi
+
+        cat >> "$BC" << EOF
+
+        # =========================================
+        # OrangeFox Recovery specific flags
+        # (appended automatically, review before building)
+        # =========================================
+        OF_MAINTAINER := ${{ github.event.inputs.MAINTAINER }}
+        OF_AB_DEVICE := ${{ github.event.inputs.FOX_AB_DEVICE }}
+        OF_USE_MAGISKBOOT := 1
+        OF_USE_MAGISKBOOT_FOR_ALL_PATCHES := 1
+        OF_USE_TWRP_SAR_DETECT := 1
+        OF_KEEP_RECOVERY_TWRP_FOLDER_NAME := 1
+        OF_FLASHLIGHT_ENABLE := 1
+        OF_ENABLE_LOCKSCREEN := 1
+        OF_USE_LOCKSCREEN := 1
+        OF_STATUS_INDENT_LEFT := 48
+        OF_STATUS_INDENT_TOP := 16
+        OF_CLOCK_POS := 30
+        OF_HIDE_NOTCH := 1
+        OF_SUPPORT_HTC_STYLE := 0
+        OF_ALLOW_DISABLE_NAVBAR := 0
+
+        FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER := 1
+        FOX_REPLACE_LIBTAR_WITH_LIBARCHIVE := 1
+        FOX_USE_NANO_EDITOR := 1
+        FOX_USE_TAR_BINARY := 1
+        FOX_USE_SED_BINARY := 1
+        FOX_USE_XZ_UTILS := 1
+        FOX_ASH_IS_BASH := 1
+        FOX_VANILLA_BUILD := 0
+        FOX_VARIANT_BUILD := "SAR"
+        FOX_BUILD_TYPE := "Unofficial"
+        FOX_ENABLE_APP_MANAGER := 1
+        EOF
+
+        echo "----- Updated BoardConfig.mk -----"
+        cat "$BC"
+
+    - name: Create repository
+      run: |
+        REPO_NAME="android_device_${{ steps.device.outputs.brand }}_${{ steps.device.outputs.device }}"
+        REPO_NAME=$(echo "$REPO_NAME" | tr -cd '[:alnum:]_')
+
+        echo "Creating repo: $REPO_NAME"
+
+        curl -X POST https://api.github.com/user/repos \
+          -H "Authorization: token ${{ secrets.GH_PAT }}" \
+          -d "{\"name\":\"$REPO_NAME\",\"private\":false}"
+
+        echo "repo=$REPO_NAME" >> $GITHUB_ENV
+
+    - name: Push device tree
+      run: |
+        cd dt/${{ steps.device.outputs.brand }}/${{ steps.device.outputs.device }}
+
+        git init
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+
+        git add .
+        git commit -m "Initial OrangeFox device tree (twrpdtgen + OF flags)"
+
+        git branch -M main
+
+        git remote add origin https://${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/${{ env.repo }}.git
+        git push origin main
