@@ -72,15 +72,22 @@ jobs:
           mv "omni_${DEVICE}.mk" "twrp_${DEVICE}.mk"
         fi
 
-        # Replace product-name references (file name, PRODUCT_NAME, lunch combos)
-        # NOTE: do NOT touch vendor/omni/config/... inherits — the recovery
-        # builder manifest (TWRP/OrangeFox/PBRP/SHRP) only ships vendor/omni,
-        # there is no vendor/twrp, so that path must stay as-is.
-        grep -rlI "omni_${DEVICE}" . 2>/dev/null | while read -r f; do
-          sed -i "s/omni_${DEVICE}/twrp_${DEVICE}/g" "$f"
+        # Confirmed against a real fox_12.1 checkout:
+        #   vendor/twrp/config/ contains common.mk, packages.mk,
+        #   BoardConfigKernel.mk, BoardConfigSoong.mk, BoardConfigTWRP.mk
+        #   — there is NO gsm.mk. So: rename omni_* -> twrp_*, rewrite
+        # vendor/omni -> vendor/twrp, and drop the gsm.mk inherit line
+        # entirely (it never exists under vendor/twrp/config).
+        grep -rlI "omni" . 2>/dev/null | while read -r f; do
+          sed -i \
+            -e "s/omni_${DEVICE}/twrp_${DEVICE}/g" \
+            -e "s/vendor\/omni/vendor\/twrp/g" \
+            -e "s/Omni stuff/TWRP stuff/g" \
+            -e "/vendor\/twrp\/config\/gsm\.mk/d" \
+            "$f"
         done
 
-        echo "----- remaining omni refs (vendor/omni/... inherits are expected here) -----"
+        echo "----- remaining omni refs -----"
         grep -rniI "omni" . || echo "none"
 
     - name: Add OrangeFox flags to BoardConfig.mk
