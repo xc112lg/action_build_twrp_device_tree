@@ -72,15 +72,15 @@ jobs:
           mv "omni_${DEVICE}.mk" "twrp_${DEVICE}.mk"
         fi
 
-        # Replace all omni references with twrp across the generated tree
-        # NOTE: this also rewrites `vendor/omni/config/...` inherits to
-        # `vendor/twrp/config/...` — that path must exist in your source
-        # manifest, otherwise the build will fail on a missing inherit.
-        grep -rlI "omni" . 2>/dev/null | while read -r f; do
-          sed -i "s/omni_${DEVICE}/twrp_${DEVICE}/g; s/vendor\/omni/vendor\/twrp/g; s/Omni stuff/TWRP stuff/g" "$f"
+        # Replace product-name references (file name, PRODUCT_NAME, lunch combos)
+        # NOTE: do NOT touch vendor/omni/config/... inherits — the recovery
+        # builder manifest (TWRP/OrangeFox/PBRP/SHRP) only ships vendor/omni,
+        # there is no vendor/twrp, so that path must stay as-is.
+        grep -rlI "omni_${DEVICE}" . 2>/dev/null | while read -r f; do
+          sed -i "s/omni_${DEVICE}/twrp_${DEVICE}/g" "$f"
         done
 
-        echo "----- remaining omni refs -----"
+        echo "----- remaining omni refs (vendor/omni/... inherits are expected here) -----"
         grep -rniI "omni" . || echo "none"
 
     - name: Add OrangeFox flags to BoardConfig.mk
