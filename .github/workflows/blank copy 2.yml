@@ -42,6 +42,89 @@ jobs:
         python3 -m twrpdtgen -o dt/ "$IMG"
         ls -R dt
 
+    # 🔥 INJECT USB GADGET INITIALIZATION
+    - name: Add USB gadget support to recovery init
+      run: |
+        RECOVERY_RC=$(find dt -name "init.recovery.qcom.rc" | head -n 1)
+        
+        if [ -z "$RECOVERY_RC" ]; then
+          echo "ERROR: init.recovery.qcom.rc not found!"
+          exit 1
+        fi
+        
+        echo "Found recovery RC at: $RECOVERY_RC"
+        
+        # Create USB initialization script
+        cat > /tmp/usb_config.txt << 'USBEOF'
+
+# =========================================
+# USB Gadget Configuration for OrangeFox
+# =========================================
+on boot
+    mount configfs none /config
+    mkdir /config/usb_gadget/g1 0770
+    mkdir /config/usb_gadget/g1/strings/0x409 0770
+    write /config/usb_gadget/g1/bcdUSB 0x0200
+    write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+    write /config/usb_gadget/g1/strings/0x409/manufacturer LGE
+    write /config/usb_gadget/g1/strings/0x409/product "LG Device"
+    
+    # Create mass storage function
+    mkdir /config/usb_gadget/g1/functions/mass_storage.0
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    
+    # Create configuration
+    mkdir /config/usb_gadget/g1/configs/b.1 0770
+    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
+    write /config/usb_gadget/g1/configs/b.1/MaxPower 500
+    
+    # USB Vendor/Product IDs (Qualcomm recovery mode)
+    write /config/usb_gadget/g1/idVendor 0x05c6
+    write /config/usb_gadget/g1/idProduct 0x9008
+    
+    # Bind functions to configuration
+    symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
+    
+    # Create FFS mounts for ADB
+    mkdir /dev/usb-ffs 0775 shell system
+    mkdir /dev/usb-ffs/adb 0770 shell system
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
+    
+    # Enable the USB gadget
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    
+    # Set USB configuration
+    setprop sys.usb.config "mass_storage,adb"
+    setprop sys.usb.configfs 1
+    
+    # Start ADB daemon
+    start adbd
+
+on init
+    setprop sys.usb.configfs 1
+
+service adbd /system/bin/adbd --root_seclabel=u:r:recovery:s0
+    class core
+    socket adbd stream 0660 system system
+    disabled
+    seclabel u:r:recovery:s0
+
+USBEOF
+        
+        # Check if USB config already exists
+        if grep -q "USB Gadget Configuration" "$RECOVERY_RC"; then
+          echo "USB gadget config already present, skipping..."
+        else
+          echo "Appending USB gadget configuration..."
+          cat /tmp/usb_config.txt >> "$RECOVERY_RC"
+          echo "✓ USB gadget config added successfully"
+        fi
+        
+        echo "----- Updated init.recovery.qcom.rc -----"
+        tail -80 "$RECOVERY_RC"
+
     # 🔥 RELIABLE DETECTION (NO BROKEN GREP)
     - name: Detect device info
       id: device
@@ -110,13 +193,13 @@ jobs:
         # This device has a separate recovery partition and needs an
         # actual recovery.img built (see BoardConfig.mk note).
         PRODUCT_BUILD_RECOVERY_IMAGE := true
-        EOF
+EOF
           fi
           cat >> "$BC" << 'EOF'
 
         # Non-A/B device with a separate recovery partition
         BOARD_USES_RECOVERY_AS_BOOT := false
-        EOF
+EOF
         fi
 
         cat >> "$BC" << EOF
@@ -156,10 +239,10 @@ jobs:
         OF_HIDE_NOTCH := 1
         OF_SUPPORT_HTC_STYLE := 0
         OF_ALLOW_DISABLE_NAVBAR := 0
-        EOF
+EOF
 
         echo "----- Updated BoardConfig.mk -----"
-        cat "$BC"
+        tail -50 "$BC"
 
     - name: Add OrangeFox flags to vendorsetup.sh
       run: |
@@ -198,10 +281,10 @@ jobs:
         export FOX_VARIANT_BUILD=SAR
         export FOX_BUILD_TYPE=Unofficial
         export FOX_ENABLE_APP_MANAGER=1
-        EOF
+EOF
 
         echo "----- Updated vendorsetup.sh -----"
-        cat "$VS"
+        tail -20 "$VS"
 
     - name: Create repository
       run: |
@@ -225,7 +308,7 @@ jobs:
         git config user.email "actions@github.com"
 
         git add .
-        git commit -m "Initial OrangeFox device tree (twrpdtgen + OF flags)"
+        git commit -m "Initial OrangeFox device tree (twrpdtgen + OF flags + USB gadget support)"
 
         git branch -M main
 
