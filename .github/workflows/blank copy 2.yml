@@ -57,61 +57,61 @@ jobs:
         # Create USB initialization script
         cat > /tmp/usb_config.txt << 'USBEOF'
 
-# =========================================
-# USB Gadget Configuration for OrangeFox
-# =========================================
-on boot
-    mount configfs none /config
-    mkdir /config/usb_gadget/g1 0770
-    mkdir /config/usb_gadget/g1/strings/0x409 0770
-    write /config/usb_gadget/g1/bcdUSB 0x0200
-    write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
-    write /config/usb_gadget/g1/strings/0x409/manufacturer LGE
-    write /config/usb_gadget/g1/strings/0x409/product "LG Device"
-    
-    # Create mass storage function
-    mkdir /config/usb_gadget/g1/functions/mass_storage.0
-    mkdir /config/usb_gadget/g1/functions/ffs.adb
-    
-    # Create configuration
-    mkdir /config/usb_gadget/g1/configs/b.1 0770
-    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
-    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
-    write /config/usb_gadget/g1/configs/b.1/MaxPower 500
-    
-    # USB Vendor/Product IDs (Qualcomm recovery mode)
-    write /config/usb_gadget/g1/idVendor 0x05c6
-    write /config/usb_gadget/g1/idProduct 0x9008
-    
-    # Bind functions to configuration
-    symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
-    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
-    
-    # Create FFS mounts for ADB
-    mkdir /dev/usb-ffs 0775 shell system
-    mkdir /dev/usb-ffs/adb 0770 shell system
-    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
-    
-    # Enable the USB gadget
-    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
-    
-    # Set USB configuration
-    setprop sys.usb.config "mass_storage,adb"
-    setprop sys.usb.configfs 1
-    
-    # Start ADB daemon
-    start adbd
-
-on init
-    setprop sys.usb.configfs 1
-
-service adbd /system/bin/adbd --root_seclabel=u:r:recovery:s0
-    class core
-    socket adbd stream 0660 system system
-    disabled
-    seclabel u:r:recovery:s0
-
-USBEOF
+        # =========================================
+        # USB Gadget Configuration for OrangeFox
+        # =========================================
+        on boot
+            mount configfs none /config
+            mkdir /config/usb_gadget/g1 0770
+            mkdir /config/usb_gadget/g1/strings/0x409 0770
+            write /config/usb_gadget/g1/bcdUSB 0x0200
+            write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+            write /config/usb_gadget/g1/strings/0x409/manufacturer LGE
+            write /config/usb_gadget/g1/strings/0x409/product "LG Device"
+            
+            # Create mass storage function
+            mkdir /config/usb_gadget/g1/functions/mass_storage.0
+            mkdir /config/usb_gadget/g1/functions/ffs.adb
+            
+            # Create configuration
+            mkdir /config/usb_gadget/g1/configs/b.1 0770
+            mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
+            write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
+            write /config/usb_gadget/g1/configs/b.1/MaxPower 500
+            
+            # USB Vendor/Product IDs (Qualcomm recovery mode)
+            write /config/usb_gadget/g1/idVendor 0x05c6
+            write /config/usb_gadget/g1/idProduct 0x9008
+            
+            # Bind functions to configuration
+            symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
+            symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
+            
+            # Create FFS mounts for ADB
+            mkdir /dev/usb-ffs 0775 shell system
+            mkdir /dev/usb-ffs/adb 0770 shell system
+            mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
+            
+            # Enable the USB gadget
+            write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+            
+            # Set USB configuration
+            setprop sys.usb.config "mass_storage,adb"
+            setprop sys.usb.configfs 1
+            
+            # Start ADB daemon
+            start adbd
+        
+        on init
+            setprop sys.usb.configfs 1
+        
+        service adbd /system/bin/adbd --root_seclabel=u:r:recovery:s0
+            class core
+            socket adbd stream 0660 system system
+            disabled
+            seclabel u:r:recovery:s0
+        
+        USBEOF
         
         # Check if USB config already exists
         if grep -q "USB Gadget Configuration" "$RECOVERY_RC"; then
