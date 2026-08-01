@@ -86,20 +86,25 @@ jobs:
             mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
             write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
             write /config/usb_gadget/g1/configs/b.1/MaxPower 500
-            write /config/usb_gadget/g1/idVendor 0x05c6
-            write /config/usb_gadget/g1/idProduct 0x9008
+            write /config/usb_gadget/g1/idVendor 0x18d1
+            write /config/usb_gadget/g1/idProduct 0x4ee7
+            mkdir /config/usb_gadget/g1/functions/ffs.mtp
             symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
             symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
+            symlink /config/usb_gadget/g1/functions/ffs.mtp /config/usb_gadget/g1/configs/b.1/f3
             mkdir /dev/usb-ffs 0775 shell system
             mkdir /dev/usb-ffs/adb 0770 shell system
+            mkdir /dev/usb-ffs/mtp 0770 shell system
             mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
+            mount functionfs mtp /dev/usb-ffs/mtp uid=2000,gid=1000,rmode=0770,fmode=0660
             write /config/usb_gadget/g1/UDC ${sys.usb.controller}
             setprop sys.usb.config "mass_storage,adb"
             setprop sys.usb.configfs 1
             start adbd
 
-        on init
-            setprop sys.usb.configfs 1
+        # Note: sys.usb.configfs is already set by twrpdtgen's generated
+        # init.recovery.<device>.rc under its own `on init` block, so we
+        # don't duplicate that trigger here.
 
         service adbd /system/bin/adbd --root_seclabel=u:r:recovery:s0
             class core
@@ -197,12 +202,16 @@ jobs:
         cat >> "$BC" << EOF
 
         # =========================================
-        # USB Storage Configuration (CRITICAL FIX)
-        # Enable USB storage and MTP for device detection
+        # USB Storage Configuration
+        # TW_MTP_DEVICE is intentionally NOT set here: it forces TWRP onto
+        # the legacy android_usb character-device MTP path (e.g.
+        # /dev/mtp_usb), which doesn't exist on this ConfigFS gadget setup.
+        # Leaving it unset lets TWRP use its default ConfigFS/FunctionFS
+        # MTP responder, which matches the ffs.mtp function defined in
+        # init.recovery.usbgadget.rc.
         # =========================================
         TW_NO_USB_STORAGE := false
         RECOVERY_SDCARD_ON_DATA := true
-        TW_MTP_DEVICE := /dev/mtp_usb
 
         # =========================================
         # Recovery UI — twrpdtgen cannot detect the backlight
