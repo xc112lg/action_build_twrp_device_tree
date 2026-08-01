@@ -93,10 +93,30 @@ jobs:
     - name: Add OrangeFox flags to BoardConfig.mk
       run: |
         BC="${{ steps.device.outputs.path }}/BoardConfig.mk"
+        DM="${{ steps.device.outputs.path }}/device.mk"
 
         if [ ! -f "$BC" ]; then
           echo "ERROR: BoardConfig.mk not found at $BC"
           exit 1
+        fi
+
+        # Non-A/B devices (separate recovery partition) need this explicitly,
+        # or AOSP's core Makefile leaves INSTALLED_RECOVERYIMAGE_TARGET empty
+        # and the recoveryimage target silently becomes a no-op.
+        if [ "${{ github.event.inputs.FOX_AB_DEVICE }}" = "0" ]; then
+          if [ -f "$DM" ]; then
+            cat >> "$DM" << 'EOF'
+
+        # This device has a separate recovery partition and needs an
+        # actual recovery.img built (see BoardConfig.mk note).
+        PRODUCT_BUILD_RECOVERY_IMAGE := true
+        EOF
+          fi
+          cat >> "$BC" << 'EOF'
+
+        # Non-A/B device with a separate recovery partition
+        BOARD_USES_RECOVERY_AS_BOOT := false
+        EOF
         fi
 
         cat >> "$BC" << EOF
