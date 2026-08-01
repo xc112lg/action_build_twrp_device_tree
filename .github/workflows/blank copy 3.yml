@@ -1,0 +1,290 @@
+name: Make OrangeFox Device last
+
+on:
+  workflow_dispatch:
+    inputs:
+      IMG_URL:
+        description: 'IMG_URL'
+        required: true
+      MAINTAINER:
+        description: 'OF_MAINTAINER (your name/handle)'
+        required: false
+        default: 'xz'
+      FOX_AB_DEVICE:
+        description: 'Is this an A/B (seamless) device? (1 = yes, 0 = no)'
+        required: false
+        default: '0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check Out
+      uses: actions/checkout@v4
+
+    - name: Prepare environment
+      run: |
+        sudo apt update
+        sudo apt -y install python3 python3-pip cpio wget aria2 zip git
+        python3 -m pip install --upgrade pip
+        python3 -m pip install twrpdtgen==2.0.0
+
+    - name: Download image
+      run: |
+        aria2c "${{ github.event.inputs.IMG_URL }}"
+        ls -lah
+
+    - name: Generate device tree
+      run: |
+        mkdir dt
+        IMG=$(ls *.img | head -n 1)
+        python3 -m twrpdtgen -o dt/ "$IMG"
+        ls -R dt
+
+    # 🔥 RELIABLE DETECTION (NO BROKEN GREP)
+    - name: Detect device info
+      id: device
+      run: |
+        # Get path like dt/samsung/a5ltechn
+        DEVICE_PATH=$(find dt -mindepth 2 -maxdepth 2 -type d | head -n 1)
+
+        BRAND=$(basename $(dirname "$DEVICE_PATH"))
+        DEVICE=$(basename "$DEVICE_PATH")
+
+        # fallback safety
+        BRAND=${BRAND:-generic}
+        DEVICE=${DEVICE:-unknown}
+
+        echo "Detected BRAND=$BRAND"
+        echo "Detected DEVICE=$DEVICE"
+
+        echo "brand=$BRAND" >> $GITHUB_OUTPUT
+        echo "device=$DEVICE" >> $GITHUB_OUTPUT
+        echo "path=$DEVICE_PATH" >> $GITHUB_OUTPUT
+
+    - name: Fix ConfigFS USB gadget override
+      run: |
+        DEVICE_PATH="${{ steps.device.outputs.path }}"
+        RC_DIR="$DEVICE_PATH/recovery/root/system/etc/init"
+        RC_FILE="$RC_DIR/init.recovery.usbgadget.rc"
+
+        mkdir -p "$RC_DIR"
+
+        cat > "$RC_FILE" << 'EOF'
+        on boot
+            mount configfs none /config
+            mkdir /config/usb_gadget/g1 0770
+            mkdir /config/usb_gadget/g1/strings/0x409 0770
+            write /config/usb_gadget/g1/bcdUSB 0x0200
+            write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+            write /config/usb_gadget/g1/strings/0x409/manufacturer LGE
+            write /config/usb_gadget/g1/strings/0x409/product "LG Device"
+            mkdir /config/usb_gadget/g1/functions/mass_storage.0
+            mkdir /config/usb_gadget/g1/functions/ffs.adb
+            mkdir /config/usb_gadget/g1/configs/b.1 0770
+            mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
+            write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
+            write /config/usb_gadget/g1/configs/b.1/MaxPower 500
+            write /config/usb_gadget/g1/idVendor 0x05c6
+            write /config/usb_gadget/g1/idProduct 0x9008
+            symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
+            symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
+            mkdir /dev/usb-ffs 0775 shell system
+            mkdir /dev/usb-ffs/adb 0770 shell system
+            mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
+            write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+            setprop sys.usb.config "mass_storage,adb"
+            setprop sys.usb.configfs 1
+            start adbd
+
+        on init
+            setprop sys.usb.configfs 1
+
+        service adbd /system/bin/adbd --root_seclabel=u:r:recovery:s0
+            class core
+            socket adbd stream 0660 system system
+            disabled
+            seclabel u:r:recovery:s0
+        EOF
+
+        echo "----- Wrote $RC_FILE -----"
+        cat "$RC_FILE"
+
+        # Make sure the generated top-level init.recovery.<device>.rc actually
+        # imports this file, otherwise init will never parse it.
+        TOP_RC=$(find "$DEVICE_PATH/recovery/root" -maxdepth 1 -name 'init.recovery.*.rc' | head -n 1)
+        if [ -n "$TOP_RC" ] && ! grep -q "init.recovery.usbgadget.rc" "$TOP_RC"; then
+          sed -i "1i import /system/etc/init/init.recovery.usbgadget.rc" "$TOP_RC"
+          echo "----- Added import to $TOP_RC -----"
+          cat "$TOP_RC"
+        fi
+
+    - name: Rename omni to twrp
+      run: |
+        cd "${{ steps.device.outputs.path }}"
+        DEVICE="${{ steps.device.outputs.device }}"
+
+        if [ -f "omni_${DEVICE}.mk" ]; then
+          mv "omni_${DEVICE}.mk" "twrp_${DEVICE}.mk"
+        fi
+
+        # Confirmed against a real fox_12.1 checkout:
+        #   vendor/twrp/config/ contains common.mk, packages.mk,
+        #   BoardConfigKernel.mk, BoardConfigSoong.mk, BoardConfigTWRP.mk
+        #   — there is NO gsm.mk. So: rename omni_* -> twrp_*, rewrite
+        # vendor/omni -> vendor/twrp, and drop the gsm.mk inherit line
+        # entirely (it never exists under vendor/twrp/config).
+        grep -rlI "omni" . 2>/dev/null | while read -r f; do
+          sed -i \
+            -e "s/omni_${DEVICE}/twrp_${DEVICE}/g" \
+            -e "s/vendor\/omni/vendor\/twrp/g" \
+            -e "s/Omni stuff/TWRP stuff/g" \
+            -e "/vendor\/twrp\/config\/gsm\.mk/d" \
+            "$f"
+        done
+
+        echo "----- remaining omni refs -----"
+        grep -rniI "omni" . || echo "none"
+
+    - name: Add OrangeFox flags to BoardConfig.mk
+      run: |
+        BC="${{ steps.device.outputs.path }}/BoardConfig.mk"
+        DM="${{ steps.device.outputs.path }}/device.mk"
+
+        if [ ! -f "$BC" ]; then
+          echo "ERROR: BoardConfig.mk not found at $BC"
+          exit 1
+        fi
+
+        # Non-A/B devices (separate recovery partition) need this explicitly,
+        # or AOSP's core Makefile leaves INSTALLED_RECOVERYIMAGE_TARGET empty
+        # and the recoveryimage target silently becomes a no-op.
+        if [ "${{ github.event.inputs.FOX_AB_DEVICE }}" = "0" ]; then
+          if [ -f "$DM" ]; then
+            cat >> "$DM" << 'EOF'
+
+        # This device has a separate recovery partition and needs an
+        # actual recovery.img built (see BoardConfig.mk note).
+        PRODUCT_BUILD_RECOVERY_IMAGE := true
+        EOF
+          fi
+          cat >> "$BC" << 'EOF'
+
+        # Non-A/B device with a separate recovery partition
+        BOARD_USES_RECOVERY_AS_BOOT := false
+        EOF
+        fi
+
+        cat >> "$BC" << EOF
+
+        # =========================================
+        # Recovery UI — twrpdtgen cannot detect the backlight
+        # driver's max value from the image alone; 255 is the
+        # common default on Qualcomm devices, verify against
+        # kernel source if you have it.
+        # =========================================
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 150
+
+        # =========================================
+        # Architecture: recovery images on 64-bit SoCs
+        # are conventionally built 32-bit-app-only
+        # =========================================
+        TARGET_SUPPORTS_64_BIT_APPS := false
+        TARGET_SUPPORTS_32_BIT_APPS := true
+
+        # =========================================
+        # OrangeFox Recovery specific flags
+        # (appended automatically, review before building)
+        # =========================================
+        OF_MAINTAINER := ${{ github.event.inputs.MAINTAINER }}
+        OF_AB_DEVICE := ${{ github.event.inputs.FOX_AB_DEVICE }}
+        OF_USE_MAGISKBOOT := 1
+        OF_USE_MAGISKBOOT_FOR_ALL_PATCHES := 1
+        OF_USE_TWRP_SAR_DETECT := 1
+        OF_KEEP_RECOVERY_TWRP_FOLDER_NAME := 1
+        OF_FLASHLIGHT_ENABLE := 1
+        OF_ENABLE_LOCKSCREEN := 1
+        OF_USE_LOCKSCREEN := 1
+        OF_STATUS_INDENT_LEFT := 48
+        OF_STATUS_INDENT_TOP := 16
+        OF_CLOCK_POS := 30
+        OF_HIDE_NOTCH := 1
+        OF_SUPPORT_HTC_STYLE := 0
+        OF_ALLOW_DISABLE_NAVBAR := 0
+        EOF
+
+        echo "----- Updated BoardConfig.mk -----"
+        cat "$BC"
+
+    - name: Add OrangeFox flags to vendorsetup.sh
+      run: |
+        VS="${{ steps.device.outputs.path }}/vendorsetup.sh"
+
+        # IMPORTANT: FOX_* build vars must NOT live in BoardConfig.mk (or any
+        # .mk file). Make doesn't strip quote characters from a variable's
+        # value the way a shell does, so a line like:
+        #   FOX_BUILD_TYPE := "Unofficial"
+        # makes $(FOX_BUILD_TYPE) literally equal to  "Unofficial"  (quotes
+        # included). OrangeFox's own build/core then wraps that value in
+        # quotes AGAIN when generating -D flags, producing the broken
+        # #define FOX_BUILD_TYPE ""Unofficial""
+        # which clang rejects with "invalid suffix on literal". OrangeFox's
+        # docs also state FOX_* vars are only reliably read from a shell
+        # script (vendorsetup.sh) or an exported env var — never from a .mk
+        # file. So these go here instead, as plain unquoted exports.
+        if [ ! -f "$VS" ]; then
+          touch "$VS"
+        fi
+
+        cat >> "$VS" << 'EOF'
+
+        # =========================================
+        # OrangeFox Recovery specific flags
+        # (appended automatically, review before building)
+        # =========================================
+        export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+        export FOX_REPLACE_LIBTAR_WITH_LIBARCHIVE=1
+        export FOX_USE_NANO_EDITOR=1
+        export FOX_USE_TAR_BINARY=1
+        export FOX_USE_SED_BINARY=1
+        export FOX_USE_XZ_UTILS=1
+        export FOX_ASH_IS_BASH=1
+        export FOX_VANILLA_BUILD=0
+        export FOX_VARIANT_BUILD=SAR
+        export FOX_BUILD_TYPE=Unofficial
+        export FOX_ENABLE_APP_MANAGER=1
+        EOF
+
+        echo "----- Updated vendorsetup.sh -----"
+        cat "$VS"
+
+    - name: Create repository
+      run: |
+        REPO_NAME="android_device_${{ steps.device.outputs.brand }}_${{ steps.device.outputs.device }}"
+        REPO_NAME=$(echo "$REPO_NAME" | tr -cd '[:alnum:]_')
+
+        echo "Creating repo: $REPO_NAME"
+
+        curl -X POST https://api.github.com/user/repos \
+          -H "Authorization: token ${{ secrets.GH_PAT }}" \
+          -d "{\"name\":\"$REPO_NAME\",\"private\":false}"
+
+        echo "repo=$REPO_NAME" >> $GITHUB_ENV
+
+    - name: Push device tree
+      run: |
+        cd dt/${{ steps.device.outputs.brand }}/${{ steps.device.outputs.device }}
+
+        git init
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+
+        git add .
+        git commit -m "Initial OrangeFox device tree (twrpdtgen + OF flags)"
+
+        git branch -M main
+
+        git remote add origin https://${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/${{ env.repo }}.git
+        git push --force origin main
