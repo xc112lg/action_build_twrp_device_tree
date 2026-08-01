@@ -102,6 +102,15 @@ jobs:
         cat >> "$BC" << EOF
 
         # =========================================
+        # Recovery UI — twrpdtgen cannot detect the backlight
+        # driver's max value from the image alone; 255 is the
+        # common default on Qualcomm devices, verify against
+        # kernel source if you have it.
+        # =========================================
+        TW_MAX_BRIGHTNESS := 255
+        TW_DEFAULT_BRIGHTNESS := 150
+
+        # =========================================
         # Architecture: recovery images on 64-bit SoCs
         # are conventionally built 32-bit-app-only
         # =========================================
