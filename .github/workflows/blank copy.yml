@@ -102,6 +102,13 @@ jobs:
         cat >> "$BC" << EOF
 
         # =========================================
+        # Architecture: recovery images on 64-bit SoCs
+        # are conventionally built 32-bit-app-only
+        # =========================================
+        TARGET_SUPPORTS_64_BIT_APPS := false
+        TARGET_SUPPORTS_32_BIT_APPS := true
+
+        # =========================================
         # OrangeFox Recovery specific flags
         # (appended automatically, review before building)
         # =========================================
