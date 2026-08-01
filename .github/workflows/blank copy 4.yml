@@ -63,42 +63,26 @@ jobs:
         echo "device=$DEVICE" >> $GITHUB_OUTPUT
         echo "path=$DEVICE_PATH" >> $GITHUB_OUTPUT
 
-    - name: Fix ConfigFS USB gadget override
-      run: |
-        DEVICE_PATH="${{ steps.device.outputs.path }}"
-
-        # twrpdtgen unconditionally emits `setprop sys.usb.configfs 1` into
-        # the generated init.recovery.*.rc files, regardless of what gadget
-        # driver the target SoC actually uses. Older Qualcomm boards
-        # (msm8996 and earlier) only have the legacy android_usb sysfs
-        # gadget, not ConfigFS.
-        #
-        # IMPORTANT — do not hand-build a full ConfigFS gadget tree here.
-        # Every modern recovery ramdisk already ships its own built-in,
-        # property-driven ConfigFS gadget logic in
-        # /system/etc/init/hw/init.rc (triggers on sys.usb.config /
-        # sys.usb.configfs / sys.usb.ffs.ready). A hand-rolled `on boot`
-        # script that manually mounts configfs, creates functions, and
-        # symlinks them into configs/b.1/f1 etc. races against that stock
-        # logic for the exact same /config/usb_gadget/g1 tree — whichever
-        # runs second gets "File exists" on the symlink, unbinds the
-        # gadget, then loops forever failing to rebind (write UDC ...
-        # "No such device"), killing and respawning adbd every cycle.
-        # Confirmed via dmesg on a ConfigFS-capable board (h872): this is
-        # exactly what happened. Do not reintroduce a custom gadget rc file
-        # here — TWRP's own runtime MTP/ADB responder already drives the
-        # stock ConfigFS logic correctly once it isn't fought over.
-        #
-        # So: only strip the forced setprop for devices where it might be
-        # wrong, and otherwise leave the stock recovery's own gadget
-        # handling untouched.
-        grep -rl "setprop sys.usb.configfs 1" "$DEVICE_PATH/recovery/root" 2>/dev/null | while read -r f; do
-          echo "Patching $f"
-          sed -i '/setprop sys\.usb\.configfs 1/d' "$f"
-        done
-
-        echo "----- remaining configfs refs -----"
-        grep -rniI "usb.configfs" "$DEVICE_PATH/recovery/root" || echo "none"
+    # NOTE: There used to be a "Fix ConfigFS USB gadget override" step here
+    # that stripped `setprop sys.usb.configfs 1` from the generated
+    # init.recovery.*.rc, on the assumption that older Qualcomm boards
+    # (msm8996 and earlier) lack ConfigFS and only support the legacy
+    # android_usb sysfs gadget.
+    #
+    # That assumption did not hold on h872 (Snapdragon 821 / msm8996
+    # family): its controller (6a00000.dwc3) is ConfigFS-capable and has
+    # no legacy android_usb fallback at all. Stripping the setprop forced
+    # sys.usb.configfs=0 with nothing to fall back to — USB (adb, MTP)
+    # stopped working entirely and adbd landed in a permanent restart loop
+    # as TWRP's own USB monitor kept retrying a mode that could never
+    # succeed. Confirmed via dmesg + recovery.log.
+    #
+    # twrpdtgen's default (`setprop sys.usb.configfs 1`) is left untouched
+    # now. Don't reintroduce a strip step without per-device evidence
+    # (kernel defconfig or a known-working recovery build) that ConfigFS
+    # genuinely isn't supported — the failure mode when the flag is wrong
+    # in either direction looks identical (adbd restart-looping), so it's
+    # easy to "fix" the wrong thing without a log to check against.
 
     - name: Fix recovery.fstab USB entries
       run: |
