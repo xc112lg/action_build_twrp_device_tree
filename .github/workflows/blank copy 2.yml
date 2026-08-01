@@ -63,28 +63,6 @@ jobs:
         echo "device=$DEVICE" >> $GITHUB_OUTPUT
         echo "path=$DEVICE_PATH" >> $GITHUB_OUTPUT
 
-    # - name: Fix ConfigFS USB gadget override
-    #   run: |
-    #     DEVICE_PATH="${{ steps.device.outputs.path }}"
-
-    #     # twrpdtgen unconditionally emits `setprop sys.usb.configfs 1` into
-    #     # the generated init.recovery.*.rc files, regardless of what gadget
-    #     # driver the target SoC actually uses. Older Qualcomm boards (msm8996
-    #     # and earlier, e.g. h872) only have the legacy android_usb sysfs
-    #     # gadget, not ConfigFS — forcing this property breaks MTP/USB-storage
-    #     # enumeration on those devices while ADB keeps working (the kernel
-    #     # brings ADB up on its own, independent of this script). Strip the
-    #     # line so the recovery falls back to whichever gadget path the
-    #     # kernel actually supports; re-add it by hand later if this
-    #     # particular device really is ConfigFS-native.
-    #     grep -rl "setprop sys.usb.configfs 1" "$DEVICE_PATH/recovery/root" 2>/dev/null | while read -r f; do
-    #       echo "Patching $f"
-    #       sed -i '/setprop sys\.usb\.configfs 1/d' "$f"
-    #     done
-
-    #     echo "----- remaining configfs refs -----"
-    #     grep -rniI "usb.configfs" "$DEVICE_PATH/recovery/root" || echo "none"
-
     - name: Rename omni to twrp
       run: |
         cd "${{ steps.device.outputs.path }}"
