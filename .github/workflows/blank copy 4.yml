@@ -108,6 +108,22 @@ jobs:
             mkdir /dev/usb-ffs 0775 shell system
             mkdir /dev/usb-ffs/adb 0770 shell system
             mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
+            # TWRP's own "Enable USB Storage" toggle is compiled out
+            # regardless of TW_NO_USB_STORAGE/TARGET_USE_CUSTOM_LUN_FILE_PATH
+            # on this build (confirmed: unaffected even by a `mka
+            # TW_NO_USB_STORAGE=false` command-line override), so nothing
+            # in TWRP ever writes the mass_storage.0 LUN backing file. We
+            # create one ourselves here instead: a small FAT32 image on
+            # /cache, lazily created once, then pointed at directly below.
+            # This is NOT your internal storage (/data/media is
+            # ext4/F2FS, unreadable by a Windows/macOS host without a
+            # driver) — it's a blank scratch drive for moving files
+            # in/out during a recovery session (ROM zips, pulled backups).
+            # UNVERIFIED: assumes /cache is already mounted and mkfs.fat
+            # exists on this ramdisk by the time `exec` runs here — check
+            # the next recovery.log/dmesg for exec/mkfs.fat errors if the
+            # drive still doesn't appear.
+            exec u:r:recovery:s0 -- /sbin/sh -c "mkdir -p /cache/usbstorage; test -f /cache/usbstorage/drive.img || (dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256 && mkfs.fat -F 32 /cache/usbstorage/drive.img)"
             setprop sys.usb.configfs 1
 
         # Kick off the default mode once the gadget skeleton above exists.
@@ -145,6 +161,7 @@ jobs:
 
         on property:sys.usb.ffs.ready=1 && property:sys.usb.config=mass_storage,adb && property:sys.usb.configfs=1
             write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "mass_storage_adb"
+            write /config/usb_gadget/g1/functions/mass_storage.0/lun.0/file /cache/usbstorage/drive.img
             symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
             symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
             write /config/usb_gadget/g1/UDC ${sys.usb.controller}
