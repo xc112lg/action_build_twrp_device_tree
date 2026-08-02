@@ -119,15 +119,19 @@ jobs:
             # ext4/F2FS, unreadable by a Windows/macOS host without a
             # driver) — it's a blank scratch drive for moving files
             # in/out during a recovery session (ROM zips, pulled backups).
-            # ROOT CAUSE CONFIRMED: init.rc's own parser does property
-            # substitution using bare $ (legacy $name / ${name} syntax) on
-            # every line — it choked on the literal `$?` inside our
-            # embedded shell script and rejected the whole exec command
-            # before it ever launched ("using deprecated syntax for
-            # specifying property '?...'"). Escaped as \$? below so init
-            # passes it through to the shell literally instead of trying
-            # to expand it as its own property reference.
-            exec u:r:recovery:s0 -- /sbin/sh -c "( mkdir -p /cache/usbstorage; echo mkdir=\$?; test -f /cache/usbstorage/drive.img && echo already_exists=1 || { dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256; echo dd=\$?; mkfs.fat -F 32 /cache/usbstorage/drive.img; echo mkfs=\$?; } ) > /cache/usbstorage.log 2>&1"
+            # ROOT CAUSE CONFIRMED (twice): init.rc's own parser does
+            # property substitution using bare $ on every line it reads,
+            # including inside exec's quoted argument — it choked on the
+            # literal $? in an inline shell one-liner and rejected the
+            # whole exec before it ever launched, and a backslash escape
+            # does NOT suppress this (init preserves the backslash as a
+            # literal character but still expands the $ that follows it).
+            # Fix: don't put shell logic in an init.rc line at all — call
+            # a real script file instead, so init only has to parse a
+            # plain path with no $ in it whatsoever. The script itself
+            # (create_usb_storage.sh, written below) is free to use $? as
+            # normal, since /sbin/sh reads and interprets it, not init.
+            exec u:r:recovery:s0 -- /sbin/sh /sbin/create_usb_storage.sh
             setprop sys.usb.configfs 1
 
         # Kick off the default mode once the gadget skeleton above exists.
@@ -183,6 +187,38 @@ jobs:
 
         echo "----- Wrote $RC_FILE -----"
         cat "$RC_FILE"
+
+        # The actual mass-storage image creation logic lives here, as a
+        # real script file — not inline in init.rc — specifically so it
+        # can use normal, unescaped $? without init's own parser trying to
+        # expand it as a property reference (see comment above the exec
+        # line in init.recovery.usb.rc for the full story).
+        SBIN_DIR="$DEVICE_PATH/recovery/root/sbin"
+        mkdir -p "$SBIN_DIR"
+        cat > "$SBIN_DIR/create_usb_storage.sh" << 'EOF'
+        #!/sbin/sh
+        # Lazily creates a 256MB FAT32-formatted scratch image on /cache,
+        # used as the mass_storage.0 LUN backing file (see
+        # init.recovery.usb.rc). This is NOT internal storage/data -- it's
+        # a blank drive for moving files in/out of recovery. Logs each
+        # step's exit code so a failure can be diagnosed via
+        # `adb pull /cache/usbstorage.log` without another blind rebuild.
+        {
+          mkdir -p /cache/usbstorage
+          echo "mkdir=$?"
+          if [ -f /cache/usbstorage/drive.img ]; then
+            echo "already_exists=1"
+          else
+            dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256
+            echo "dd=$?"
+            mkfs.fat -F 32 /cache/usbstorage/drive.img
+            echo "mkfs=$?"
+          fi
+        } > /cache/usbstorage.log 2>&1
+        EOF
+        chmod 0755 "$SBIN_DIR/create_usb_storage.sh"
+        echo "----- Wrote $SBIN_DIR/create_usb_storage.sh -----"
+        cat "$SBIN_DIR/create_usb_storage.sh"
 
         # Clean up any leftover file/import from the old static-binding
         # approach, if this tree was previously patched by an earlier run.
