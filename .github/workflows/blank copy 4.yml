@@ -119,16 +119,15 @@ jobs:
             # ext4/F2FS, unreadable by a Windows/macOS host without a
             # driver) — it's a blank scratch drive for moving files
             # in/out during a recovery session (ROM zips, pulled backups).
-            # CONFIRMED BROKEN, cause unclear: the exec below exited status
-            # 127 in ~1ms — too fast for `dd` to have even started writing
-            # 256MB, so the failure is happening at or before `mkdir`, most
-            # likely /sbin/sh itself not existing/executable at that exact
-            # path on this ramdisk (dmesg only shows the overall exit
-            # status, not which command in the chain actually ran). Output
-            # is now redirected to /cache/usbstorage.log so the next test
-            # can be diagnosed via `adb pull /cache/usbstorage.log` instead
-            # of guessing again from dmesg alone.
-            exec u:r:recovery:s0 -- /sbin/sh -c "( mkdir -p /cache/usbstorage; echo mkdir=$?; test -f /cache/usbstorage/drive.img && echo already_exists=1 || { dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256; echo dd=$?; mkfs.fat -F 32 /cache/usbstorage/drive.img; echo mkfs=$?; } ) > /cache/usbstorage.log 2>&1"
+            # ROOT CAUSE CONFIRMED: init.rc's own parser does property
+            # substitution using bare $ (legacy $name / ${name} syntax) on
+            # every line — it choked on the literal `$?` inside our
+            # embedded shell script and rejected the whole exec command
+            # before it ever launched ("using deprecated syntax for
+            # specifying property '?...'"). Escaped as \$? below so init
+            # passes it through to the shell literally instead of trying
+            # to expand it as its own property reference.
+            exec u:r:recovery:s0 -- /sbin/sh -c "( mkdir -p /cache/usbstorage; echo mkdir=\$?; test -f /cache/usbstorage/drive.img && echo already_exists=1 || { dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256; echo dd=\$?; mkfs.fat -F 32 /cache/usbstorage/drive.img; echo mkfs=\$?; } ) > /cache/usbstorage.log 2>&1"
             setprop sys.usb.configfs 1
 
         # Kick off the default mode once the gadget skeleton above exists.
