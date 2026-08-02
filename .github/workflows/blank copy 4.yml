@@ -119,11 +119,16 @@ jobs:
             # ext4/F2FS, unreadable by a Windows/macOS host without a
             # driver) — it's a blank scratch drive for moving files
             # in/out during a recovery session (ROM zips, pulled backups).
-            # UNVERIFIED: assumes /cache is already mounted and mkfs.fat
-            # exists on this ramdisk by the time `exec` runs here — check
-            # the next recovery.log/dmesg for exec/mkfs.fat errors if the
-            # drive still doesn't appear.
-            exec u:r:recovery:s0 -- /sbin/sh -c "mkdir -p /cache/usbstorage; test -f /cache/usbstorage/drive.img || (dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256 && mkfs.fat -F 32 /cache/usbstorage/drive.img)"
+            # CONFIRMED BROKEN, cause unclear: the exec below exited status
+            # 127 in ~1ms — too fast for `dd` to have even started writing
+            # 256MB, so the failure is happening at or before `mkdir`, most
+            # likely /sbin/sh itself not existing/executable at that exact
+            # path on this ramdisk (dmesg only shows the overall exit
+            # status, not which command in the chain actually ran). Output
+            # is now redirected to /cache/usbstorage.log so the next test
+            # can be diagnosed via `adb pull /cache/usbstorage.log` instead
+            # of guessing again from dmesg alone.
+            exec u:r:recovery:s0 -- /sbin/sh -c "( mkdir -p /cache/usbstorage; echo mkdir=$?; test -f /cache/usbstorage/drive.img && echo already_exists=1 || { dd if=/dev/zero of=/cache/usbstorage/drive.img bs=1M count=256; echo dd=$?; mkfs.fat -F 32 /cache/usbstorage/drive.img; echo mkfs=$?; } ) > /cache/usbstorage.log 2>&1"
             setprop sys.usb.configfs 1
 
         # Kick off the default mode once the gadget skeleton above exists.
