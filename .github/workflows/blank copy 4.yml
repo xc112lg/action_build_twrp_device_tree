@@ -108,30 +108,6 @@ jobs:
             mkdir /dev/usb-ffs 0775 shell system
             mkdir /dev/usb-ffs/adb 0770 shell system
             mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=1000,rmode=0770,fmode=0660
-            # TWRP's own "Enable USB Storage" toggle is compiled out
-            # regardless of TW_NO_USB_STORAGE/TARGET_USE_CUSTOM_LUN_FILE_PATH
-            # on this build (confirmed: unaffected even by a `mka
-            # TW_NO_USB_STORAGE=false` command-line override), so nothing
-            # in TWRP ever writes the mass_storage.0 LUN backing file. We
-            # create one ourselves here instead: a small FAT32 image on
-            # /cache, lazily created once, then pointed at directly below.
-            # This is NOT your internal storage (/data/media is
-            # ext4/F2FS, unreadable by a Windows/macOS host without a
-            # driver) — it's a blank scratch drive for moving files
-            # in/out during a recovery session (ROM zips, pulled backups).
-            # ROOT CAUSE CONFIRMED (twice): init.rc's own parser does
-            # property substitution using bare $ on every line it reads,
-            # including inside exec's quoted argument — it choked on the
-            # literal $? in an inline shell one-liner and rejected the
-            # whole exec before it ever launched, and a backslash escape
-            # does NOT suppress this (init preserves the backslash as a
-            # literal character but still expands the $ that follows it).
-            # Fix: don't put shell logic in an init.rc line at all — call
-            # a real script file instead, so init only has to parse a
-            # plain path with no $ in it whatsoever. The script itself
-            # (create_usb_storage.sh, written below) is free to use $? as
-            # normal, since /sbin/sh reads and interprets it, not init.
-            exec u:r:recovery:s0 -- /sbin/sh /sbin/create_usb_storage.sh
             setprop sys.usb.configfs 1
 
         # Kick off the default mode once the gadget skeleton above exists.
@@ -169,6 +145,29 @@ jobs:
 
         on property:sys.usb.ffs.ready=1 && property:sys.usb.config=mass_storage,adb && property:sys.usb.configfs=1
             write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "mass_storage_adb"
+            # TWRP's own "Enable USB Storage" toggle is compiled out
+            # regardless of TW_NO_USB_STORAGE/TARGET_USE_CUSTOM_LUN_FILE_PATH
+            # on this build (confirmed: unaffected even by a `mka
+            # TW_NO_USB_STORAGE=false` command-line override), so nothing
+            # in TWRP ever writes the mass_storage.0 LUN backing file. We
+            # create one ourselves instead: a small FAT32 image on /cache,
+            # lazily created once, then pointed at directly below. This is
+            # NOT your internal storage (/data/media is ext4/F2FS,
+            # unreadable by a Windows/macOS host without a driver) — it's
+            # a blank scratch drive for moving files in/out of recovery.
+            #
+            # This exec was originally in `on init` (~3s into boot) and
+            # failed instantly with exit 127 there — twice, with two
+            # different script contents, both via /sbin/sh — strongly
+            # suggesting the shell itself isn't executable that early.
+            # Moved here instead: this trigger only fires after adbd has
+            # actually started and configured its endpoint (confirmed
+            # reliably reached at ~8s in every log so far), a point we
+            # know boot has progressed further. If this STILL fails with
+            # the same instant 127, that rules out timing entirely and
+            # means /sbin/sh (or busybox/toybox providing it) is missing
+            # from this ramdisk altogether, not just "not ready yet".
+            exec u:r:recovery:s0 -- /sbin/sh /sbin/create_usb_storage.sh
             write /config/usb_gadget/g1/functions/mass_storage.0/lun.0/file /cache/usbstorage/drive.img
             symlink /config/usb_gadget/g1/functions/mass_storage.0 /config/usb_gadget/g1/configs/b.1/f1
             symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
