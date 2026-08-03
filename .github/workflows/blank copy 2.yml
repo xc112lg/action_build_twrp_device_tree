@@ -1,4 +1,4 @@
-name: Make OrangeFox Device test
+name: Make OrangeFox Device test 1
 
 on:
   workflow_dispatch:
